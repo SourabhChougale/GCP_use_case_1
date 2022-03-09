@@ -65,7 +65,7 @@ public class PubSubToBQ {
 
 
         PCollectionTuple input =
-                pipeline.apply("ReadPubSubMessages", PubsubIO.readStrings().fromTopic(options.getInputTopic()))
+                pipeline.apply("ReadPubSubMessages", PubsubIO.readStrings().fromTopic(options.getinputTopic()))
                         .apply("MessageParsing", new PubSubMessageToAccountSchema());
 
 
@@ -79,7 +79,7 @@ public class PubSubToBQ {
                             }
                         }))
                         .apply("Json To Row Convertor",JsonToRow.withSchema(rawSchema))
-                .apply("WriteToBQ", BigQueryIO.<Row>write().to(options.getOutputTableName())
+                .apply("WriteToBQ", BigQueryIO.<Row>write().to(options.getoutputTable())
                         .useBeamSchema()
                         .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND)
                         .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED));
@@ -88,7 +88,7 @@ public class PubSubToBQ {
         input
                 // Retrieve unparsed messages
                 .get(unparsedMessages)
-                .apply("WriteInDLQtopic", TextIO.write().to(options.getDLQTopic()));
+                .apply("WriteInDLQtopic", TextIO.write().to(options.getdlqTopic()));
 
         return pipeline.run();
 
