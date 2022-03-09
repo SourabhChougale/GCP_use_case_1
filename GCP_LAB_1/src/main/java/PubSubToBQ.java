@@ -20,27 +20,23 @@ public class PubSubToBQ {
 
     private static final Logger LOG = LoggerFactory.getLogger(PubSubToBQ.class);
 
-    public static class PubSubMessageToAccountSchema extends PTransform<PCollection<String>, PCollectionTuple> {
-        @Override
-        public PCollectionTuple expand(PCollection<String> input) {
-            return input
-                    .apply("JsonToGson", ParDo.of(new DoFn<String, Account>() {
-                                @ProcessElement
-                                public void convert(ProcessContext context) {
-                                    String json = context.element();
-                                    try {
-                                        Gson gson = new Gson();
-                                        Account a = gson.fromJson(json, Account.class);
-                                        context.output(parsedMessages, a);
-                                    } catch (JsonSyntaxException e) {
-                                        context.output(unparsedMessages, json);
-                                    }
 
-                                }
-                            })
-                            .withOutputTags(parsedMessages, TupleTagList.of(unparsedMessages)));
+    static class parsing extends DoFn<String,Account> {
+        @ProcessElement
+        public void processElement(@Element String json,ProcessContext processContext)throws Exception{
+            try {
+                Gson gson = new Gson();
+                Account account = gson.fromJson(json, Account.class);
+                processContext.output(parsedMessages,account);
+            }catch(Exception e){
+                e.printStackTrace();
+                processContext.output(unparsedMessages,json);
+            }
         }
     }
+
+
+
     public static final Schema rawSchema = Schema
             .builder()
             .addInt32Field("id")
@@ -53,6 +49,7 @@ public class PubSubToBQ {
         Options options = PipelineOptionsFactory.fromArgs(args)
                 .withValidation()
                 .as(Options.class);
+
         run(options);
     }
 
@@ -66,11 +63,12 @@ public class PubSubToBQ {
 
         PCollectionTuple input =
                 pipeline.apply("ReadPubSubMessages", PubsubIO.readStrings().fromTopic(options.getinputTopic()))
-                        .apply("MessageParsing", new PubSubMessageToAccountSchema());
+                        .apply("MessageParsing", ParDo.of(new parsing()).withOutputTags(parsedMessages, TupleTagList.of(unparsedMessages)));
 
+        PCollection<Account> validData = input.get(parsedMessages);
+        PCollection<String> invalidData = input.get(unparsedMessages);
 
-                input.get(parsedMessages)
-                        .apply("GsontoJson",ParDo.of(new DoFn<Account, String>() {
+                       /* .apply("GsontoJson",ParDo.of(new DoFn<Account, String>() {
                             @ProcessElement
                             public void convert(ProcessContext context){
                                 Gson g = new Gson();
@@ -78,17 +76,18 @@ public class PubSubToBQ {
                                 context.output(gsonString);
                             }
                         }))
-                        .apply("Json To Row Convertor",JsonToRow.withSchema(rawSchema))
-                .apply("WriteToBQ", BigQueryIO.<Row>write().to(options.getoutputTable())
+                        .apply("Json To Row Convertor",JsonToRow.withSchema(rawSchema))*/
+               validData .apply("WriteToBQ", BigQueryIO.<Account>write().to(options.getoutputTable())
                         .useBeamSchema()
                         .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND)
                         .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED));
 
         // Write unparsed messages to Cloud Storage
-        input
+
                 // Retrieve unparsed messages
-                .get(unparsedMessages)
+        invalidData
                 .apply("WriteInDLQtopic", TextIO.write().to(options.getdlqTopic()));
+                
 
         return pipeline.run();
 
