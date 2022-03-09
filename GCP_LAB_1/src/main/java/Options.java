@@ -5,7 +5,7 @@ public interface Options extends DataflowPipelineOptions {
 
     @Description("BigQuery table name")
     String getoutputTable();
-    void setoutputTableName(String outputTable);
+    void setoutputTable(String outputTable);
 
     @Description("Input topic name")
     String getinputTopic();
