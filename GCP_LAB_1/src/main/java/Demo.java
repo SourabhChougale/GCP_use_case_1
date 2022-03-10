@@ -15,6 +15,7 @@
  */
 
 import com.google.api.services.bigquery.model.TableRow;
+import com.google.api.services.bigquery.model.TableSchema;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
@@ -25,6 +26,7 @@ import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.schemas.JavaFieldSchema;
 import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.schemas.annotations.DefaultSchema;
@@ -39,7 +41,7 @@ import org.slf4j.LoggerFactory;
 
 
 public class Demo {
-    static final TupleTag<TableRow> parsedMessages = new TupleTag<TableRow>() {
+    static final TupleTag<String> parsedMessages = new TupleTag<String>() {
     };
     static final TupleTag<String> unparsedMessages = new TupleTag<String>() {
     };
@@ -78,7 +80,6 @@ public class Demo {
      */
     public static void main(String[] args) {
         Option options = PipelineOptionsFactory.fromArgs(args).as(Option.class);
-
         run(options);
     }
 
@@ -112,23 +113,25 @@ public class Demo {
 
         }
     }*/
+    @DefaultSchema(JavaFieldSchema.class)
     public static class PubsubMessageToRow extends PTransform<PCollection<String>, PCollectionTuple> {
         @Override
         public PCollectionTuple expand(PCollection<String> input) {
             return input
-                    .apply("JsonToRow", ParDo.of(new DoFn<String, TableRow>() {
+                    .apply("JsonToRow", ParDo.of(new DoFn<String, String>() {
                                 @ProcessElement
                                 public void processElement(ProcessContext context) {
                                     String json = context.element();
-                                    JSONObject obj=new JSONObject(json);
+                                   // JSONObject obj=new JSONObject(json);
 
                                     try {
+                                        JSONObject obj=new JSONObject(json);
                                         TableRow row=new TableRow().
                                                 set("id",obj.getInt("id")).
                                                 set("name",obj.getString("name")).
                                                 set("surname",obj.getString("surname"));
-                                        context.output(parsedMessages,row);
-                                    } catch (JsonSyntaxException e) {
+                                        context.output(parsedMessages,json);
+                                    } catch (Exception e) {
                                         context.output(unparsedMessages, json);
                                     }
 
@@ -148,13 +151,15 @@ public class Demo {
      * @param options The execution options.
      * @return The pipeline result.
      */
- /*   public static final Schema rawSchema = Schema
+  public static final Schema rawSchema = Schema
             .builder()
             .addInt32Field("id")
             .addStringField("name")
             .addStringField("surname")
             .build();
-*/
+
+
+
 
     public static PipelineResult run(Option options) {
 
@@ -162,9 +167,7 @@ public class Demo {
     Pipeline pipeline = Pipeline.create(options);
 
 
-    // Static input and output
-    String input = options.getinputTopic();
-    String output = options.getoutputTable();
+
 
     /*
      * Steps:
@@ -173,15 +176,16 @@ public class Demo {
      * 3) Write something
      */
 
-        PCollectionTuple  pubsub=pipeline.apply("ReadFromGCS", PubsubIO.readStrings().fromTopic(input))
-                .apply("ConvertMessageToCommonLog", new PubsubMessageToRow());
+        PCollectionTuple  pubsub=pipeline.apply("ReadFromGCS", PubsubIO.readStrings().fromTopic(options.getinputTopic()))
+                .apply("Message parsing", new PubsubMessageToRow());
 
 
 
        pubsub.get(parsedMessages)
-               .apply("WriteToBQ", BigQueryIO.<TableRow>write().to(output).useBeamSchema()
-                       .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND)
-                       .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED));
+               .apply("To row",JsonToRow.withSchema(rawSchema))
+               .apply("WriteToBQ", BigQueryIO.<Row>write().to(options.getoutputTable())
+                       .useBeamSchema()
+                       .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND));
 
        pubsub.get(unparsedMessages)
                .apply("WriteToDLQ",PubsubIO.writeStrings().to(options.getdlqTopic()));
