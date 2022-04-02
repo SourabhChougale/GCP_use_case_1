@@ -46,15 +46,10 @@ public class PubSubToBQ {
     };
     static final TupleTag<String> unparsedMessages = new TupleTag<String>() {
     };
-    /**
-     * The logger to output status messages to.
-     */
+
     private static final Logger LOG = LoggerFactory.getLogger(Demo.class);
 
-    /**
-     * The {@link Option} class provides the custom execution options passed by the
-     * executor at the command-line.
-     */
+
     public interface Option extends DataflowPipelineOptions {
         @Description("BigQuery table name")
         String getoutputTable();
@@ -70,15 +65,7 @@ public class PubSubToBQ {
         void setdlqTopic(String dlqTopic);
     }
 
-    /**
-     * The main entry-point for pipeline execution. This method will start the
-     * pipeline but will not wait for it's execution to finish. If blocking
-     * execution is required, use the {@link PubSubToBQ#run(Option)} method to
-     * start the pipeline and invoke {@code result.waitUntilFinish()} on the
-     * {@link PipelineResult}.
-     *
-     * @param args The command-line args passed by the executor.
-     */
+
     public static void main(String[] args) {
         Option options = PipelineOptionsFactory.fromArgs(args).as(Option.class);
         run(options);
@@ -96,9 +83,7 @@ public class PubSubToBQ {
 
     }*/
 
-    /**
-     * A DoFn acccepting Json and outputing CommonLog with Beam Schema
-     */
+
 
     @DefaultSchema(JavaFieldSchema.class)
     public static class PubsubMessageToRow extends PTransform<PCollection<String>, PCollectionTuple> {
@@ -133,15 +118,7 @@ public class PubSubToBQ {
 
         }
     }
-    /**
-     * Runs the pipeline to completion with the specified options. This method does
-     * not wait until the pipeline is finished before returning. Invoke
-     * {@code result.waitUntilFinish()} on the result object to block until the
-     * pipeline is finished running if blocking programmatic execution is required.
-     *
-     * @param options The execution options.
-     * @return The pipeline result.
-     */
+
     public static final Schema rawSchema = Schema
             .builder()
             .addInt32Field("id")
@@ -169,9 +146,7 @@ public class PubSubToBQ {
 
         PCollectionTuple  pubsub=pipeline.apply("ReadFromGCS", PubsubIO.readStrings().fromTopic(options.getinputTopic()))
                 .apply("Message parsing", new PubsubMessageToRow());
-
-
-
+        
         pubsub.get(parsedMessages)
                 .apply("To row",JsonToRow.withSchema(rawSchema))
                 .apply("WriteToBQ", BigQueryIO.<Row>write().to(options.getoutputTable())
