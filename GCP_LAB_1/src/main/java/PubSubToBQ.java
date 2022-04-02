@@ -1,80 +1,147 @@
+/*
+ * Copyright (C) 2018 Google Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
+import com.google.api.services.bigquery.model.TableRow;
+import com.google.api.services.bigquery.model.TableSchema;
+import com.google.google.storage.v1.Object;
+import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
+import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.options.ValueProvider;
+import org.apache.beam.sdk.schemas.JavaFieldSchema;
 import org.apache.beam.sdk.schemas.Schema;
+import org.apache.beam.sdk.schemas.annotations.DefaultSchema;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.JsonToRow;
+import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.*;
-import org.apache.beam.vendor.grpc.v1p36p0.com.google.gson.Gson;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 
 public class PubSubToBQ {
+    static final TupleTag<String> parsedMessages = new TupleTag<String>() {
+    };
+    static final TupleTag<String> unparsedMessages = new TupleTag<String>() {
+    };
+    /**
+     * The logger to output status messages to.
+     */
+    private static final Logger LOG = LoggerFactory.getLogger(Demo.class);
 
     /**
-     * The logger to output status messages to
+     * The {@link Option} class provides the custom execution options passed by the
+     * executor at the command-line.
      */
-    private static final Logger LOG = LoggerFactory.getLogger(PubSubToBQ.class);
-
-    /**
-     * side outputs
-     */
-    private static TupleTag<Account> validMsgs = new TupleTag<Account>() {};
-    private static TupleTag<String> invalidMsgs = new TupleTag<String>(){};
-
-    /**
-     * The Options class provides the custom execution options passed by the executor at the
-     * command-line
-     */
-    public interface Options extends DataflowPipelineOptions {
-
+    public interface Option extends DataflowPipelineOptions {
         @Description("BigQuery table name")
-        String getTableName();
-        void setTableName(String outputTable);
+        String getoutputTable();
+        void setoutputTable(String outputTable);
 
-        @Description("PubSub Subscription")
-        String getSubTopic();
-        void setSubTopic(String inputTopic);
+        @Description("Input topic name")
+        String getinputTopic();
+        void setinputTopic(String inputTopic);
 
-        @Description("DLQ topic")
-        String getDlqTopic();
-        void setDlqTopic(String dlqTopic);
 
-    }
-
-    public static void main(String[] args) {
-
-        PipelineOptionsFactory.register(Options.class);
-        Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
-        run(options);
-
+        @Description("The DLQ Topic used to store malformed Messages.")
+        String getdlqTopic();
+        void setdlqTopic(String dlqTopic);
     }
 
     /**
-     * A Json Validator to separate an input message as valid or invalid message
+     * The main entry-point for pipeline execution. This method will start the
+     * pipeline but will not wait for it's execution to finish. If blocking
+     * execution is required, use the {@link PubSubToBQ#run(Option)} method to
+     * start the pipeline and invoke {@code result.waitUntilFinish()} on the
+     * {@link PipelineResult}.
+     *
+     * @param args The command-line args passed by the executor.
      */
-    static class validJson extends DoFn<String,Account> {
-        @ProcessElement
-        public void processElement(@Element String json,ProcessContext processContext)throws Exception{
-            try {
-                Gson gson = new Gson();
-                Account account = gson.fromJson(json, Account.class);
-                processContext.output(validMsgs,account);
-            }catch(Exception e){
-                e.printStackTrace();
-                processContext.output(invalidMsgs,json);
-            }
+    public static void main(String[] args) {
+        Option options = PipelineOptionsFactory.fromArgs(args).as(Option.class);
+        run(options);
+    }
+
+    /**
+     * A class used for parsing JSON web server events
+     * Annotated with @DefaultSchema to the allow the use of Beam Schemas and <Row> object
+     */
+   /* @DefaultSchema(JavaFieldSchema.class)
+    public static class CommonLog {
+        int id;
+        String name;
+        String surname;
+
+    }*/
+
+    /**
+     * A DoFn acccepting Json and outputing CommonLog with Beam Schema
+     */
+
+    @DefaultSchema(JavaFieldSchema.class)
+    public static class PubsubMessageToRow extends PTransform<PCollection<String>, PCollectionTuple> {
+        @Override
+        public PCollectionTuple expand(PCollection<String> input) {
+            return input
+                    .apply("JsonToRow", ParDo.of(new DoFn<String, String>() {
+                                @ProcessElement
+                                public void processElement(ProcessContext context) {
+                                    String json = context.element();
+                                    JSONObject obj=new JSONObject(json);
+                                    try{
+                                        if(rawSchema.getFieldCount()==3)
+                                        {
+                                        if (obj.get("id") instanceof Integer && obj.get("name") instanceof String && obj.get("surname") instanceof String)
+                                            context.output(parsedMessages, json);
+                                    }
+                                    else{
+                                        context.output(unparsedMessages, json);
+                                    }
+                                    }catch (Exception e) {
+                                        context.output(unparsedMessages, json);
+                                    }
+
+
+
+
+                                }
+                            })
+                            .withOutputTags(parsedMessages, TupleTagList.of(unparsedMessages)));
+
+
         }
     }
-
-    // Schema for JSON to row conversion with three different fields and data types
+    /**
+     * Runs the pipeline to completion with the specified options. This method does
+     * not wait until the pipeline is finished before returning. Invoke
+     * {@code result.waitUntilFinish()} on the result object to block until the
+     * pipeline is finished running if blocking programmatic execution is required.
+     *
+     * @param options The execution options.
+     * @return The pipeline result.
+     */
     public static final Schema rawSchema = Schema
             .builder()
             .addInt32Field("id")
@@ -82,43 +149,41 @@ public class PubSubToBQ {
             .addStringField("surname")
             .build();
 
-    /**
-     * This function creates the pipeline to check for the valid or invalid message and
-     * write it accordingly to BigQuery Table or DLQ topic
-     */
-    public static PipelineResult run(Options options) {
 
+
+
+    public static PipelineResult run(Option options) {
+
+        // Create the pipeline
         Pipeline pipeline = Pipeline.create(options);
 
-        //Read message from pub/sub (subscription)
-        PCollectionTuple pubsubMessage = pipeline
-                .apply("Read Message From PS-Subscription", PubsubIO.readStrings().fromSubscription(options.getSubTopic()))
-                //Filter data into two category (VALID and INVALID)
-                .apply("Validator", ParDo.of(new validJson()).withOutputTags(validMsgs, TupleTagList.of(invalidMsgs)));
 
-        //get PCollections for both VALID and INVALID Data
-        PCollection<Account> validData = pubsubMessage.get(validMsgs);
-        PCollection<String> invalidData = pubsubMessage.get(invalidMsgs);
 
-        validData.apply("Gson to Json Convertor",ParDo.of(new DoFn<Account, String>() {
-                    @ProcessElement
-                    public void convert(ProcessContext context){
-                        Gson g = new Gson();
-                        String gsonString = g.toJson(context.element());
-                        context.output(gsonString);
-                    }
-                })).apply("Json To Row Convertor",JsonToRow.withSchema(rawSchema)).
-                //Write valid message to BigQuery Table
-                        apply("Write Message To BigQuery Table",BigQueryIO.<Row>write().to(options.getTableName())
+
+        /*
+         * Steps:
+         * 1) Read something
+         * 2) Transform something
+         * 3) Write something
+         */
+
+        PCollectionTuple  pubsub=pipeline.apply("ReadFromGCS", PubsubIO.readStrings().fromTopic(options.getinputTopic()))
+                .apply("Message parsing", new PubsubMessageToRow());
+
+
+
+        pubsub.get(parsedMessages)
+                .apply("To row",JsonToRow.withSchema(rawSchema))
+                .apply("WriteToBQ", BigQueryIO.<Row>write().to(options.getoutputTable())
                         .useBeamSchema()
-                        .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_NEVER)
                         .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND));
 
-        //Write invalid message to DLQ Topic
-        invalidData.apply("Send Invalid Message To DLQ",PubsubIO.writeStrings().to(options.getDlqTopic()));
+        pubsub.get(unparsedMessages)
+                .apply("WriteToDLQ",PubsubIO.writeStrings().to(options.getdlqTopic()));
+
+
+        LOG.info("Building pipeline...");
 
         return pipeline.run();
-
     }
-
 }
